@@ -6,6 +6,8 @@ from scipy import stats
 import matplotlib.pyplot as plt
 import pathlib
 from scipy.ndimage import uniform_filter1d
+from copy import deepcopy
+from glob import glob
 
 
 
@@ -673,5 +675,225 @@ def plot_channel_time_series(raw, savebase=None, exclude_bads=False):
         fpath = None
     return fpath
 
+def plot_spectra(raw, savebase=None):
+    """Plot power spectra for each sensor modality.
+    
+    Parameters
+    ----------
+    raw : :py:class:`mne.io.Raw <mne.io.Raw>`   
+        MNE Raw object.
+    savebase : str  
+        Base string for saving figures.
+        
+    Returns
+    -------
+    fpath1 : str
+        Path to saved figure (full spectra).
+    fpath2 : str
+        Path to saved figure (zoomed in spectra).
+    """
+
+    is_ctf = raw.info["dev_ctf_t"] is not None
+    if is_ctf:
+        # Note that with CTF mne.pick_types will return:
+        # ~274 axial grads (as magnetometers) if {picks: 'mag', ref_meg: False}
+        # ~28 reference axial grads if {picks: 'grad'}
+        channel_types = {
+            'Axial Grad (chtype=''mag'')': mne.pick_types(raw.info, meg='mag', ref_meg=False, exclude='bads'),
+            'EEG': mne.pick_types(raw.info, eeg=True, exclude='bads'),
+        }
+    else:
+        channel_types = {
+            'Magnetometers': mne.pick_types(raw.info, meg='mag', exclude='bads'),
+            'Gradiometers': mne.pick_types(raw.info, meg='grad', exclude='bads'),
+            'EEG': mne.pick_types(raw.info, eeg=True, exclude='bads'),
+        }
+
+    # Number of subplots, i.e. the number of different channel types in the fif file
+    nrows = 0
+    for _, c in sorted(channel_types.items()):
+        if len(c) > 0:
+            nrows += 1
+
+    if nrows == 0:
+        return None
+
+    fig, ax = plt.subplots(nrows=nrows, ncols=1, figsize=(8, 7))
+    if nrows == 1:
+        ax = [ax]
+    row = 0
+
+    for name, chan_inds in sorted(channel_types.items()):
+        if len(chan_inds) == 0:
+            continue
+
+        # Plot spectra
+        raw.compute_psd(
+            picks=chan_inds, 
+            n_fft=int(raw.info['sfreq']*2),
+            verbose=0).plot(
+                        axes=ax[row],
+                        show=False,)
+
+        ax[row].set_title(name, fontsize=12)
+
+        row += 1
+
+    # Save full spectra
+    if savebase is not None:
+        figname = savebase.format('spectra_full')
+        fig.savefig(figname, dpi=150, transparent=True)
+        plt.close(fig)
+
+    # Make plots
+    fig, ax = plt.subplots(nrows=nrows, ncols=1, figsize=(8, 7))
+    if nrows == 1:
+        ax = [ax]
+    row = 0
+
+    for name, chan_inds in sorted(channel_types.items()):
+        if len(chan_inds) == 0:
+            continue
+
+        # Plot zoomed in spectra
+        raw.compute_psd(
+        picks=chan_inds, 
+        fmin=1,
+        fmax=48,
+        n_fft=int(raw.info['sfreq']*2),
+        verbose=0).plot(
+                    axes=ax[row],
+                    show=False,
+                )
+
+        ax[row].set_title(name, fontsize=12)
+
+        row += 1
+
+    # Save zoomed in spectra
+    if savebase is not None:
+        figname = savebase.format('spectra_zoom')
+        fig.savefig(figname, dpi=150, transparent=True)
+        plt.close(fig)
+
+        # Return filenames
+        savebase = pathlib.Path(savebase)
+        filebase = savebase.parent.name + "/" + savebase.name
+        fpath1 = filebase.format('spectra_full')
+        fpath2 = filebase.format('spectra_zoom')
+    else:
+        fpath1 = None
+        fpath2 = None
+    return fpath1, fpath2
 
 
+def plot_freqbands(raw, savebase=None):
+    """Plot power spectra for each sensor modality.
+    
+    Parameters
+    ----------
+    raw : :py:class:`mne.io.Raw <mne.io.Raw>`   
+        MNE Raw object.
+    savebase : str  
+        Base string for saving figures.
+        
+    Returns
+    -------
+    figname : str
+        Path to saved figure.
+    """
+    if 'dev_ctf_t' in raw.info.keys() and raw.info["dev_ctf_t"] is not None:
+        is_ctf = True
+    else:
+        is_ctf = False
+        
+    is_parc = np.any(['parcel' in ch for ch in raw.info['ch_names']])
+    if is_ctf:
+        # Note that with CTF mne.pick_types will return:
+        # ~274 axial grads (as magnetometers) if {picks: 'mag', ref_meg: False}
+        # ~28 reference axial grads if {picks: 'grad'}
+        channel_types = {
+            'Axial Grad (chtype=''mag'')': mne.pick_types(raw.info, meg='mag', ref_meg=False, exclude='bads'),
+            'EEG': mne.pick_types(raw.info, eeg=True, exclude='bads'),
+        }
+    elif is_parc:
+        channel_types = {
+            'Parcel': mne.pick_types(raw.info, misc=True, ref_meg=False, exclude='bads'),
+        }
+    else:
+        channel_types = {
+            'Magnetometers': mne.pick_types(raw.info, meg='mag', exclude='bads'),
+            'Gradiometers': mne.pick_types(raw.info, meg='grad', exclude='bads'),
+            'EEG': mne.pick_types(raw.info, eeg=True, exclude='bads'),
+        }
+
+    # only keep those channel types that have sensor position information.
+    for key, picks in list(channel_types.items()):
+        try:
+            if raw.copy().pick(picks).get_montage() is None:
+                del channel_types[key]
+        except Exception:
+            del channel_types[key]
+
+    
+    # Number of subplots, i.e. the number of different channel types in the fif file
+    nrows = 0
+    for _, c in sorted(channel_types.items()):
+        if len(c) > 0:
+            nrows += 1
+
+    if nrows == 0:
+        return None
+    
+    freq_bands = [(1,4), (4,8), (8,13), (13,30), (30,80), (80,150)]
+    ix = [i for i in range(len(freq_bands)) if np.logical_and(freq_bands[i][1] > raw.info['highpass'], freq_bands[i][0] < raw.info['lowpass'])]
+    freq_bands = [freq_bands[i] for i in ix]
+    freq_band_names = [['Delta', 'Theta', 'Alpha', 'Beta', 'Gamma', 'High Gamma'][i] for i in ix]
+    ncols = len(freq_bands)
+
+    fig, ax = plt.subplots(nrows=nrows, ncols=ncols, figsize=(8, 0.5 + 1.5*nrows))
+    
+    row = 0
+    for name, chan_inds in sorted(channel_types.items()):
+        if len(chan_inds) == 0:
+            continue
+        
+        # Plot spectra
+        raw_zscore = deepcopy(raw).apply_function(lambda x: ((x - np.mean(x)) / np.std(x)), picks=chan_inds)
+        psd = raw_zscore.compute_psd(
+            picks=chan_inds, 
+            n_fft=int(raw.info['sfreq']*2),
+            verbose=0)
+        
+        if nrows==1:
+            iax = ax
+        else:
+            iax = ax[row]
+        
+        for ifrq, (f1, f2) in enumerate(freq_bands):
+            inds = np.logical_and(psd.freqs>f1, psd.freqs<=(f2))
+            p = psd._data[:, inds].mean(axis=1)
+            if is_parc: # normalize because nilearwn doesn't plot small values
+                plot_source_topo(p/p.std(), axis=iax[ifrq], cmap='hot') 
+            else:
+                mne.viz.plot_topomap(p, psd.info, axes=iax[ifrq], cmap='hot')
+            if row==0:
+                iax[ifrq].set_title(f"{freq_band_names[ifrq]}\n({f1}-{f2} Hz)")
+            if ifrq==0:
+                iax[ifrq].text(-0.1, 0.5, name, transform=iax[ifrq].transAxes, 
+                               rotation=90, va='center', ha='center', fontsize=10)
+
+        row += 1
+
+    # Save power bands spectra
+    if savebase is not None:
+        figname = savebase.format('freqbands')
+        fig.savefig(figname, dpi=150, transparent=True)
+        plt.close(fig)
+        
+        savebase = pathlib.Path(savebase)
+        filebase = savebase.parent.name + "/" + savebase.name
+        fpath = filebase.format('freqbands')
+        return fpath
+    else:
+        return None
