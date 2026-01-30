@@ -1,4 +1,4 @@
-preproc_funcs.py - contains the functions not included in packages
+preproc_funcs.py - contains functions not included in packages
 
 osld-test.ipynb - checks whether all the compatibilities are met; generates simulated data and runs an HMM on it
 
